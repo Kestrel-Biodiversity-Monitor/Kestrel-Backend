@@ -39,6 +39,9 @@ app.use("/api/forum", require("./routes/forumRoutes"));
 app.use("/api/admin", require("./routes/adminRoutes"));
 app.use("/api/documents", require("./routes/documentRoutes"));
 app.use("/api/regions", require("./routes/regionRoutes"));
+app.use("/api/surveys", require("./routes/surveyRoutes"));
+app.use("/api/notifications", require("./routes/notificationRoutes"));
+app.use("/api/conservation", require("./routes/conservationRoutes"));
 
 // ─── Health Check ─────────────────────────────────────────────────────────────
 app.get("/api/health", (req, res) => res.json({
