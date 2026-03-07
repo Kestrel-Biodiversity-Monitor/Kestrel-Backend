@@ -97,4 +97,45 @@ const comparison = asyncHandler(async (req, res) => {
     });
 });
 
-module.exports = { speciesCount, monthlyTrends, regionSummary, comparison };
+// GET /api/analytics/heatmap
+const getHeatmapData = asyncHandler(async (req, res) => {
+    const { startDate, endDate, species, riskLevel } = req.query;
+
+    // Build query
+    const query = { status: "approved", "location.coordinates": { $exists: true, $ne: [] } };
+    
+    if (startDate || endDate) {
+        query.createdAt = {};
+        if (startDate) query.createdAt.$gte = new Date(startDate);
+        if (endDate) query.createdAt.$lte = new Date(endDate);
+    }
+    
+    if (species) {
+        query.$or = [
+            { speciesName: new RegExp(species, "i") },
+            { speciesId: species },
+        ];
+    }
+    
+    if (riskLevel && ["Low", "Medium", "High", "Critical"].includes(riskLevel)) {
+        query.riskLevel = riskLevel;
+    }
+
+    // Fetch reports with coordinates
+    const reports = await SpeciesReport.find(query).select("location.coordinates riskLevel numberOfIndividuals").lean();
+
+    // Convert to heatmap format: [lat, lng, intensity]
+    const riskWeight = { Low: 1, Medium: 2, High: 3, Critical: 5 };
+    const heatmapData = reports.map((r) => {
+        const [lng, lat] = r.location.coordinates;
+        const intensity = (riskWeight[r.riskLevel] || 1) * (r.numberOfIndividuals || 1);
+        return [lat, lng, intensity];
+    });
+
+    res.json({
+        count: heatmapData.length,
+        data: heatmapData,
+    });
+});
+
+module.exports = { speciesCount, monthlyTrends, regionSummary, comparison, getHeatmapData };
