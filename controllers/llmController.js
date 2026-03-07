@@ -9,11 +9,12 @@ const fs = require("fs").promises;
 // Groq API integration
 const GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions";
 
-// Model configurations
+// Model configurations - Updated with correct Groq API model IDs
 const GROQ_MODELS = {
-    "llama3-8b-8192": { name: "LLaMA3 8B", context: 8192 },
+    "llama-3.1-8b-instant": { name: "LLaMA 3.1 8B (Fastest)", context: 8192 },
+    "llama-3.3-70b-versatile": { name: "LLaMA 3.3 70B (Best)", context: 8192 },
     "mixtral-8x7b-32768": { name: "Mixtral 8x7B", context: 32768 },
-    "gemma-7b-it": { name: "Gemma 7B", context: 8192 },
+    "gemma2-9b-it": { name: "Gemma 2 9B", context: 8192 },
 };
 
 // POST /api/llm/config - Save/Update API key and model
