@@ -154,17 +154,28 @@ const uploadDocument = asyncHandler(async (req, res) => {
     return res.status(500).json({ message: "Failed to read file" });
   }
 
-  // Chunk the content (500 words per chunk)
+  // Chunk the content with overlapping windows for better context preservation
   const words = content.split(/\s+/);
   const chunkSize = 500;
+  const overlapSize = 100; // 100-word overlap between chunks
   const chunks = [];
 
-  for (let i = 0; i < words.length; i += chunkSize) {
-    const chunkText = words.slice(i, i + chunkSize).join(" ");
-    chunks.push({
-      text: chunkText,
-      chunkIndex: Math.floor(i / chunkSize),
-    });
+  for (let i = 0; i < words.length; i += (chunkSize - overlapSize)) {
+    const chunkWords = words.slice(i, i + chunkSize);
+    const chunkText = chunkWords.join(" ");
+    
+    // Only add non-empty chunks
+    if (chunkText.trim().length > 0) {
+      chunks.push({
+        text: chunkText,
+        chunkIndex: chunks.length,
+        startWordIndex: i,
+        endWordIndex: i + chunkWords.length,
+      });
+    }
+    
+    // Break if we've processed all words
+    if (i + chunkSize >= words.length) break;
   }
 
   // Save to database
