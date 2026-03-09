@@ -17,15 +17,20 @@ const OPENAI_EMBEDDINGS_URL = "https://api.openai.com/v1/embeddings";
  * @returns {Promise<number[]|number[][]>} Embedding vector(s)
  */
 const generateOpenAIEmbedding = async (input) => {
-  if (!process.env.OPENAI_API_KEY || process.env.OPENAI_API_KEY === 'your_openai_api_key_here') {
-    throw new Error("OPENAI_API_KEY is not configured in environment variables");
+  if (
+    !process.env.OPENAI_API_KEY ||
+    process.env.OPENAI_API_KEY === "your_openai_api_key_here"
+  ) {
+    throw new Error(
+      "OPENAI_API_KEY is not configured in environment variables",
+    );
   }
 
   try {
     const response = await fetch(OPENAI_EMBEDDINGS_URL, {
       method: "POST",
       headers: {
-        "Authorization": `Bearer ${process.env.OPENAI_API_KEY}`,
+        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
@@ -40,10 +45,10 @@ const generateOpenAIEmbedding = async (input) => {
     }
 
     const data = await response.json();
-    
+
     // Return single vector or array of vectors
     if (Array.isArray(input)) {
-      return data.data.map(item => item.embedding);
+      return data.data.map((item) => item.embedding);
     } else {
       return data.data[0].embedding;
     }
@@ -255,7 +260,9 @@ const uploadDocument = asyncHandler(async (req, res) => {
     document.status = "ready";
     await document.save();
 
-    console.log(`✅ Document "${originalname}" processed: ${chunkTexts.length} chunks → Pinecone`);
+    console.log(
+      `✅ Document "${originalname}" processed: ${chunkTexts.length} chunks → Pinecone`,
+    );
 
     res.json({
       message: "Document processed successfully",
@@ -270,7 +277,7 @@ const uploadDocument = asyncHandler(async (req, res) => {
     // Update document status to failed
     document.status = "failed";
     await document.save();
-    
+
     console.error("Document processing error:", error.message);
     throw new Error(`Failed to process document: ${error.message}`);
   }
@@ -299,9 +306,11 @@ const deleteDocument = asyncHandler(async (req, res) => {
   try {
     // Delete vectors from Pinecone first
     const pineconeIndex = getPineconeIndex();
-    
-    console.log(`Deleting vectors for document ${document._id} from Pinecone...`);
-    
+
+    console.log(
+      `Deleting vectors for document ${document._id} from Pinecone...`,
+    );
+
     // Delete all vectors with matching documentId metadata
     await pineconeIndex.deleteMany({
       filter: {
@@ -386,7 +395,7 @@ const askQuestion = asyncHandler(async (req, res) => {
 
         // Query Pinecone for most relevant chunks
         const pineconeIndex = getPineconeIndex();
-        
+
         // Build query with metadata filter for specific document
         const queryRequest = {
           vector: questionEmbedding,
