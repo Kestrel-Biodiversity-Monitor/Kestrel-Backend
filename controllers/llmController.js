@@ -5,6 +5,8 @@ const asyncHandler = require("../utils/asyncHandler");
 const multer = require("multer");
 const path = require("path");
 const fs = require("fs").promises;
+const { PDFParse } = require("pdf-parse");
+const { parse: csvParse } = require("csv-parse/sync");
 const { getPineconeIndex } = require("../config/pinecone");
 
 // API URLs
@@ -196,12 +198,36 @@ const uploadDocument = asyncHandler(async (req, res) => {
       ? "csv"
       : "txt";
 
-  // Read file content
+  // Extract text content based on file type
   let content = "";
   try {
-    content = await fs.readFile(filePath, "utf-8");
+    if (fileType === "pdf") {
+      // Parse PDF to extract text (pdf-parse requires Uint8Array)
+      const dataBuffer = await fs.readFile(filePath);
+      const uint8Array = new Uint8Array(dataBuffer);
+      const parser = new PDFParse(uint8Array);
+      await parser.load();
+      const result = await parser.getText();
+      content = result.text;
+      console.log(`PDF parsed: ${result.pages} pages, ${content.length} characters`);
+    } else if (fileType === "csv") {
+      // Parse CSV and convert to text
+      const csvData = await fs.readFile(filePath, "utf-8");
+      const records = csvParse(csvData, { columns: true });
+      content = records.map(row => Object.entries(row).map(([k, v]) => `${k}: ${v}`).join(", ")).join("\n");
+      console.log(`CSV parsed: ${records.length} rows`);
+    } else {
+      // Plain text files
+      content = await fs.readFile(filePath, "utf-8");
+      console.log(`Text file read: ${content.length} characters`);
+    }
+
+    if (!content || content.trim().length === 0) {
+      return res.status(400).json({ message: "File contains no readable text" });
+    }
   } catch (error) {
-    return res.status(500).json({ message: "Failed to read file" });
+    console.error("File parsing error:", error.message);
+    return res.status(500).json({ message: `Failed to parse ${fileType.toUpperCase()} file: ${error.message}` });
   }
 
   // First, create document record in MongoDB (without chunks)
@@ -240,16 +266,16 @@ const uploadDocument = asyncHandler(async (req, res) => {
 
     // Prepare records for Pinecone INFERENCE index (text-based, not vectors!)
     // Pinecone will generate embeddings using llama-text-embed-v2
+    // NOTE: Inference indexes require flat metadata (no nested objects)
     const pineconeIndex = getPineconeIndex();
     const records = chunkTexts.map((text, index) => ({
       id: `${document._id}_chunk_${index}`,
       text: text, // Send text, not vectors - Pinecone generates embeddings
-      metadata: {
-        documentId: document._id.toString(),
-        fileName: originalname,
-        chunkIndex: index,
-        userId: req.user._id.toString(),
-      },
+      // Flatten metadata - all values must be primitives (string, number, boolean)
+      documentId: document._id.toString(),
+      fileName: originalname,
+      chunkIndex: index,
+      userId: req.user._id.toString(),
     }));
 
     // Validate records before upserting
@@ -260,13 +286,16 @@ const uploadDocument = asyncHandler(async (req, res) => {
     console.log(`Sample record format:`, {
       id: records[0].id,
       text: records[0].text.substring(0, 50) + "...",
-      metadata: records[0].metadata,
+      documentId: records[0].documentId,
+      fileName: records[0].fileName,
+      chunkIndex: records[0].chunkIndex,
     });
 
     // Upsert records to Pinecone inference index in batches (max 100 per batch)
     const batchSize = 100;
+    const namespace = "kestrel-documents"; // Namespace for organizing documents
     console.log(
-      `Upserting ${records.length} records to Pinecone inference index...`,
+      `Upserting ${records.length} records to Pinecone inference index (namespace: ${namespace})...`,
     );
 
     for (let i = 0; i < records.length; i += batchSize) {
@@ -278,11 +307,19 @@ const uploadDocument = asyncHandler(async (req, res) => {
         continue;
       }
 
+      // Debug: Log actual data being sent to Pinecone
+      console.log(`Batch ${Math.floor(i / batchSize) + 1} details:`);
+      console.log(`  - Records count: ${batch.length}`);
+      console.log(`  - First record:`, JSON.stringify(batch[0], null, 2));
+
       try {
-        // Upsert text records - Pinecone will embed them automatically
-        await pineconeIndex.upsert(batch);
+        // Use upsertRecords for inference index (JavaScript SDK uses camelCase)
+        await pineconeIndex.upsertRecords({
+          namespace: namespace,
+          records: batch
+        });
         console.log(
-          `  ✓ Batch ${Math.floor(i / batchSize) + 1}/${Math.ceil(vectors.length / batchSize)} uploaded (${batch.length} vectors)`,
+          `  ✓ Batch ${Math.floor(i / batchSize) + 1}/${Math.ceil(records.length / batchSize)} uploaded (${batch.length} records)`,
         );
       } catch (batchError) {
         console.error(
@@ -350,7 +387,9 @@ const deleteDocument = asyncHandler(async (req, res) => {
     );
 
     // Delete all vectors with matching documentId metadata
+    const namespace = "kestrel-documents"; // Same namespace used for upsert
     await pineconeIndex.deleteMany({
+      namespace: namespace,
       filter: {
         documentId: { $eq: document._id.toString() },
       },
@@ -434,9 +473,11 @@ const askQuestion = asyncHandler(async (req, res) => {
           `Querying Pinecone inference index for document ${documentId}...`,
         );
 
-        // For inference indexes, we can query with the raw question text
+        // For inference indexes, use searchRecords with text input
         // Pinecone will generate embeddings on-the-fly
-        const queryResponse = await pineconeIndex.query({
+        const namespace = "kestrel-documents"; // Same namespace used for upsert
+        const queryResponse = await pineconeIndex.searchRecords({
+          namespace: namespace,
           data: question, // Send text directly for inference indexes
           topK: 3,
           includeMetadata: true,
