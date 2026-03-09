@@ -296,6 +296,25 @@ const deleteDocument = asyncHandler(async (req, res) => {
     return res.status(404).json({ message: "Document not found" });
   }
 
+  try {
+    // Delete vectors from Pinecone first
+    const pineconeIndex = getPineconeIndex();
+    
+    console.log(`Deleting vectors for document ${document._id} from Pinecone...`);
+    
+    // Delete all vectors with matching documentId metadata
+    await pineconeIndex.deleteMany({
+      filter: {
+        documentId: { $eq: document._id.toString() },
+      },
+    });
+
+    console.log(`✅ Deleted Pinecone vectors for document ${document._id}`);
+  } catch (error) {
+    console.error("Pinecone deletion error:", error.message);
+    // Continue with local deletion even if Pinecone fails
+  }
+
   // Delete file from uploads folder
   try {
     await fs.unlink(path.join(__dirname, "..", document.fileUrl));
@@ -303,6 +322,7 @@ const deleteDocument = asyncHandler(async (req, res) => {
     // Ignore if file doesn't exist
   }
 
+  // Delete document from MongoDB
   await document.deleteOne();
 
   res.json({ message: "Document deleted" });
