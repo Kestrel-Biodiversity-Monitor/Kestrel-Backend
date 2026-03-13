@@ -12,7 +12,7 @@ const {
   deleteConversation,
 } = require("../controllers/llmController");
 const { protect } = require("../middlewares/authMiddleware");
-const upload = require("../middlewares/upload");
+const documentUpload = require("../middlewares/documentUpload");
 
 // All routes require authentication
 router.use(protect);
@@ -22,7 +22,7 @@ router.post("/config", saveConfig);
 router.get("/config", getConfig);
 
 // Document management
-router.post("/upload-document", upload.single("file"), uploadDocument);
+router.post("/upload-document", documentUpload.single("file"), uploadDocument);
 router.get("/documents", getDocuments);
 router.delete("/documents/:id", deleteDocument);
 

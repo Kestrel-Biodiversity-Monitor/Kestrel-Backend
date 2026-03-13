@@ -146,7 +146,7 @@ const comparison = asyncHandler(async (req, res) => {
 
 // GET /api/analytics/heatmap
 const getHeatmapData = asyncHandler(async (req, res) => {
-  const { startDate, endDate, species, riskLevel } = req.query;
+  const { startDate, endDate, species, riskLevel, zoom, bounds } = req.query;
 
   // Build query
   const query = {
@@ -173,21 +173,73 @@ const getHeatmapData = asyncHandler(async (req, res) => {
 
   // Fetch reports with coordinates
   const reports = await SpeciesReport.find(query)
-    .select("location.coordinates riskLevel numberOfIndividuals")
+    .select("location.coordinates riskLevel numberOfIndividuals createdAt")
     .lean();
 
-  // Convert to heatmap format: [lat, lng, intensity]
+  // Determine grid precision based on zoom level (default: zoom 6)
+  const zoomLevel = parseInt(zoom) || 6;
+  // Higher zoom = more precision (smaller grid cells)
+  // Zoom levels: 1-5: 5 degrees, 6-10: 1 degree, 11-15: 0.1 degrees, 16+: 0.01 degrees
+  let gridPrecision;
+  if (zoomLevel <= 5) gridPrecision = 5;
+  else if (zoomLevel <= 10) gridPrecision = 1;
+  else if (zoomLevel <= 15) gridPrecision = 0.1;
+  else gridPrecision = 0.01;
+
+  // Helper function to get grid cell key for aggregation
+  const getGridKey = (lat, lng) => {
+    const gridLat = Math.floor(lat / gridPrecision) * gridPrecision;
+    const gridLng = Math.floor(lng / gridPrecision) * gridPrecision;
+    return `${gridLat.toFixed(6)},${gridLng.toFixed(6)}`;
+  };
+
+  // Aggregate data points into grid cells
   const riskWeight = { Low: 1, Medium: 2, High: 3, Critical: 5 };
-  const heatmapData = reports.map((r) => {
+  const gridCells = {};
+
+  reports.forEach((r) => {
     const [lng, lat] = r.location.coordinates;
+    const gridKey = getGridKey(lat, lng);
+
+    if (!gridCells[gridKey]) {
+      gridCells[gridKey] = {
+        lat:
+          Math.floor(lat / gridPrecision) * gridPrecision + gridPrecision / 2,
+        lng:
+          Math.floor(lng / gridPrecision) * gridPrecision + gridPrecision / 2,
+        intensity: 0,
+        count: 0,
+        reports: [],
+      };
+    }
+
     const intensity =
       (riskWeight[r.riskLevel] || 1) * (r.numberOfIndividuals || 1);
-    return [lat, lng, intensity];
+    gridCells[gridKey].intensity += intensity;
+    gridCells[gridKey].count += 1;
+    gridCells[gridKey].reports.push({
+      date: r.createdAt,
+      risk: r.riskLevel,
+    });
   });
 
+  // Convert aggregated grid cells to heatmap format: [lat, lng, intensity]
+  const heatmapData = Object.values(gridCells).map((cell) => [
+    cell.lat,
+    cell.lng,
+    cell.intensity,
+  ]);
+
+  // Sort by intensity for frontend optimization
+  heatmapData.sort((a, b) => b[2] - a[2]);
+
   res.json({
-    count: heatmapData.length,
+    count: reports.length,
+    gridCount: heatmapData.length,
     data: heatmapData,
+    precision: gridPrecision,
+    zoom: zoomLevel,
+    aggregated: true,
   });
 });
 

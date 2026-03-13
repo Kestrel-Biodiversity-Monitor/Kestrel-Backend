@@ -5,9 +5,61 @@ const asyncHandler = require("../utils/asyncHandler");
 const multer = require("multer");
 const path = require("path");
 const fs = require("fs").promises;
+const { PDFParse } = require("pdf-parse");
+const { parse: csvParse } = require("csv-parse/sync");
+const { getPineconeIndex } = require("../config/pinecone");
 
-// Groq API integration
+// API URLs
 const GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions";
+
+// Local embedding configuration (match your Pinecone index dimension)
+const EMBEDDING_DIMENSIONS = parseInt(process.env.PINECONE_DIMENSION) || 384;
+
+/**
+ * Generate embeddings locally using TF-IDF (free, no API calls)
+ * @param {string|string[]} input - Text or array of texts to embed
+ * @param {string[]} vocabulary - Global vocabulary for consistent dimensions
+ * @returns {number[]|number[][]} Embedding vector(s)
+ */
+const generateLocalEmbedding = (input, vocabulary) => {
+  const isArray = Array.isArray(input);
+  const texts = isArray ? input : [input];
+  const embeddings = [];
+
+  for (const text of texts) {
+    const words = text.toLowerCase().match(/\b\w+\b/g) || [];
+    const wordFreq = {};
+
+    // Calculate term frequency
+    words.forEach((word) => {
+      wordFreq[word] = (wordFreq[word] || 0) + 1;
+    });
+
+    // Create vector based on vocabulary
+    let vector = vocabulary.map((word) => wordFreq[word] || 0);
+
+    // Pad or truncate to fixed dimensions
+    if (vector.length < EMBEDDING_DIMENSIONS) {
+      vector = [
+        ...vector,
+        ...Array(EMBEDDING_DIMENSIONS - vector.length).fill(0),
+      ];
+    } else if (vector.length > EMBEDDING_DIMENSIONS) {
+      vector = vector.slice(0, EMBEDDING_DIMENSIONS);
+    }
+
+    // Normalize the vector
+    const magnitude = Math.sqrt(
+      vector.reduce((sum, val) => sum + val * val, 0),
+    );
+    const normalized =
+      magnitude > 0 ? vector.map((val) => val / magnitude) : vector;
+
+    embeddings.push(normalized);
+  }
+
+  return isArray ? embeddings : embeddings[0];
+};
 
 // Model configurations - Official Groq Production Models (as of March 2026)
 const GROQ_MODELS = {
@@ -146,47 +198,164 @@ const uploadDocument = asyncHandler(async (req, res) => {
       ? "csv"
       : "txt";
 
-  // Read file content
+  // Extract text content based on file type
   let content = "";
   try {
-    content = await fs.readFile(filePath, "utf-8");
+    if (fileType === "pdf") {
+      // Parse PDF to extract text (pdf-parse requires Uint8Array)
+      const dataBuffer = await fs.readFile(filePath);
+      const uint8Array = new Uint8Array(dataBuffer);
+      const parser = new PDFParse(uint8Array);
+      await parser.load();
+      const result = await parser.getText();
+      content = result.text;
+      console.log(`PDF parsed: ${result.pages} pages, ${content.length} characters`);
+    } else if (fileType === "csv") {
+      // Parse CSV and convert to text
+      const csvData = await fs.readFile(filePath, "utf-8");
+      const records = csvParse(csvData, { columns: true });
+      content = records.map(row => Object.entries(row).map(([k, v]) => `${k}: ${v}`).join(", ")).join("\n");
+      console.log(`CSV parsed: ${records.length} rows`);
+    } else {
+      // Plain text files
+      content = await fs.readFile(filePath, "utf-8");
+      console.log(`Text file read: ${content.length} characters`);
+    }
+
+    if (!content || content.trim().length === 0) {
+      return res.status(400).json({ message: "File contains no readable text" });
+    }
   } catch (error) {
-    return res.status(500).json({ message: "Failed to read file" });
+    console.error("File parsing error:", error.message);
+    return res.status(500).json({ message: `Failed to parse ${fileType.toUpperCase()} file: ${error.message}` });
   }
 
-  // Chunk the content (500 words per chunk)
-  const words = content.split(/\s+/);
-  const chunkSize = 500;
-  const chunks = [];
-
-  for (let i = 0; i < words.length; i += chunkSize) {
-    const chunkText = words.slice(i, i + chunkSize).join(" ");
-    chunks.push({
-      text: chunkText,
-      chunkIndex: Math.floor(i / chunkSize),
-    });
-  }
-
-  // Save to database
+  // First, create document record in MongoDB (without chunks)
   const document = await DocumentContext.create({
     userId: req.user._id,
     fileName: originalname,
     fileUrl: `/uploads/${path.basename(filePath)}`,
     fileType,
-    chunks,
-    totalChunks: chunks.length,
-    status: "ready",
+    totalChunks: 0,
+    status: "processing",
   });
 
-  res.json({
-    message: "Document processed successfully",
-    document: {
-      _id: document._id,
-      fileName: document.fileName,
-      totalChunks: document.totalChunks,
-      status: document.status,
-    },
-  });
+  try {
+    // Chunk the content with overlapping windows for better context preservation
+    const words = content.split(/\s+/);
+    const chunkSize = 500;
+    const overlapSize = 100; // 100-word overlap between chunks
+    const chunkTexts = [];
+
+    for (let i = 0; i < words.length; i += chunkSize - overlapSize) {
+      const chunkWords = words.slice(i, i + chunkSize);
+      const chunkText = chunkWords.join(" ");
+
+      // Only add non-empty chunks
+      if (chunkText.trim().length > 0) {
+        chunkTexts.push(chunkText);
+      }
+
+      // Break if we've processed all words
+      if (i + chunkSize >= words.length) break;
+    }
+
+    console.log(
+      `Processing ${chunkTexts.length} chunks for Pinecone inference...`,
+    );
+
+    // Prepare records for Pinecone INFERENCE index (text-based, not vectors!)
+    // Pinecone will generate embeddings using llama-text-embed-v2
+    // NOTE: Inference indexes require flat metadata (no nested objects)
+    const pineconeIndex = getPineconeIndex();
+    const records = chunkTexts.map((text, index) => ({
+      id: `${document._id}_chunk_${index}`,
+      text: text, // Send text, not vectors - Pinecone generates embeddings
+      // Flatten metadata - all values must be primitives (string, number, boolean)
+      documentId: document._id.toString(),
+      fileName: originalname,
+      chunkIndex: index,
+      userId: req.user._id.toString(),
+    }));
+
+    // Validate records before upserting
+    if (!records || records.length === 0) {
+      throw new Error("No records generated for upload");
+    }
+
+    console.log(`Sample record format:`, {
+      id: records[0].id,
+      text: records[0].text.substring(0, 50) + "...",
+      documentId: records[0].documentId,
+      fileName: records[0].fileName,
+      chunkIndex: records[0].chunkIndex,
+    });
+
+    // Upsert records to Pinecone inference index in batches (max 100 per batch)
+    const batchSize = 100;
+    const namespace = "kestrel-documents"; // Namespace for organizing documents
+    console.log(
+      `Upserting ${records.length} records to Pinecone inference index (namespace: ${namespace})...`,
+    );
+
+    for (let i = 0; i < records.length; i += batchSize) {
+      const batch = records.slice(i, i + batchSize);
+
+      // Validate batch format
+      if (!batch || batch.length === 0) {
+        console.error(`Empty batch at index ${i}`);
+        continue;
+      }
+
+      // Debug: Log actual data being sent to Pinecone
+      console.log(`Batch ${Math.floor(i / batchSize) + 1} details:`);
+      console.log(`  - Records count: ${batch.length}`);
+      console.log(`  - First record:`, JSON.stringify(batch[0], null, 2));
+
+      try {
+        // Use upsertRecords for inference index (JavaScript SDK uses camelCase)
+        await pineconeIndex.upsertRecords({
+          namespace: namespace,
+          records: batch
+        });
+        console.log(
+          `  ✓ Batch ${Math.floor(i / batchSize) + 1}/${Math.ceil(records.length / batchSize)} uploaded (${batch.length} records)`,
+        );
+      } catch (batchError) {
+        console.error(
+          `  ✗ Batch ${Math.floor(i / batchSize) + 1} failed:`,
+          batchError.message,
+        );
+        throw batchError;
+      }
+    }
+
+    // Update document status
+    document.totalChunks = chunkTexts.length;
+    document.status = "ready";
+    await document.save();
+
+    console.log(
+      `✅ Document "${originalname}" processed: ${chunkTexts.length} chunks → Pinecone`,
+    );
+
+    res.json({
+      message: "Document processed successfully",
+      document: {
+        _id: document._id,
+        fileName: document.fileName,
+        totalChunks: document.totalChunks,
+        status: document.status,
+      },
+    });
+  } catch (error) {
+    // Update document status to failed
+    document.status = "failed";
+    await document.save();
+
+    console.error("Document processing error:", error.message);
+    throw new Error(`Failed to process document: ${error.message}`);
+  }
 });
 
 // GET /api/llm/documents - List user's documents
@@ -209,6 +378,29 @@ const deleteDocument = asyncHandler(async (req, res) => {
     return res.status(404).json({ message: "Document not found" });
   }
 
+  try {
+    // Delete vectors from Pinecone first
+    const pineconeIndex = getPineconeIndex();
+
+    console.log(
+      `Deleting vectors for document ${document._id} from Pinecone...`,
+    );
+
+    // Delete all vectors with matching documentId metadata
+    const namespace = "kestrel-documents"; // Same namespace used for upsert
+    await pineconeIndex.deleteMany({
+      namespace: namespace,
+      filter: {
+        documentId: { $eq: document._id.toString() },
+      },
+    });
+
+    console.log(`✅ Deleted Pinecone vectors for document ${document._id}`);
+  } catch (error) {
+    console.error("Pinecone deletion error:", error.message);
+    // Continue with local deletion even if Pinecone fails
+  }
+
   // Delete file from uploads folder
   try {
     await fs.unlink(path.join(__dirname, "..", document.fileUrl));
@@ -216,6 +408,7 @@ const deleteDocument = asyncHandler(async (req, res) => {
     // Ignore if file doesn't exist
   }
 
+  // Delete document from MongoDB
   await document.deleteOne();
 
   res.json({ message: "Document deleted" });
@@ -232,11 +425,9 @@ const askQuestion = asyncHandler(async (req, res) => {
   // Get user's LLM config
   const config = await LLMConfig.findOne({ userId: req.user._id });
   if (!config) {
-    return res
-      .status(400)
-      .json({
-        message: "LLM not configured. Please set up your API key first.",
-      });
+    return res.status(400).json({
+      message: "LLM not configured. Please set up your API key first.",
+    });
   }
 
   const apiKey = config.getApiKey();
@@ -259,6 +450,12 @@ const askQuestion = asyncHandler(async (req, res) => {
     });
   }
 
+  // Get user profile for personalized context
+  const User = require("../models/User");
+  const userProfile = await User.findById(req.user._id).select(
+    "name role organization bio",
+  );
+
   // Build context from document if provided
   let contextText = "";
   if (documentId) {
@@ -268,29 +465,93 @@ const askQuestion = asyncHandler(async (req, res) => {
     });
 
     if (document && document.status === "ready") {
-      // Simple keyword search in chunks (better than nothing without embeddings)
-      const keywords = question
-        .toLowerCase()
-        .split(/\s+/)
-        .filter((w) => w.length > 3);
-      const relevantChunks = document.chunks
-        .filter((chunk) => {
-          const chunkLower = chunk.text.toLowerCase();
-          return keywords.some((kw) => chunkLower.includes(kw));
-        })
-        .slice(0, 3); // Top 3 chunks
+      try {
+        // Query Pinecone inference index with text (not vectors!)
+        const pineconeIndex = getPineconeIndex();
 
-      contextText = relevantChunks.map((c) => c.text).join("\n\n");
+        console.log(
+          `Querying Pinecone inference index for document ${documentId}...`,
+        );
+
+        // For inference indexes, use searchRecords with text input
+        // Pinecone will generate embeddings on-the-fly
+        const namespace = "kestrel-documents"; // Same namespace used for upsert
+        const queryResponse = await pineconeIndex.searchRecords({
+          namespace: namespace,
+          data: question, // Send text directly for inference indexes
+          topK: 3,
+          includeMetadata: true,
+          filter: {
+            documentId: { $eq: documentId },
+          },
+        });
+
+        // Extract text from matches
+        if (queryResponse.matches && queryResponse.matches.length > 0) {
+          const relevantChunks = queryResponse.matches
+            .filter((match) => match.score > 0.3) // Lower threshold for inference models
+            .map((match) => ({
+              text: match.metadata?.text || match.text || "", // Text might be in metadata or direct
+              score: match.score,
+              chunkIndex: match.metadata?.chunkIndex || 0,
+            }));
+
+          contextText = relevantChunks.map((c) => c.text).join("\n\n");
+
+          // Log similarity scores for debugging
+          console.log(
+            "Top Pinecone matches:",
+            relevantChunks.map((c) => ({
+              index: c.chunkIndex,
+              score: c.score.toFixed(3),
+            })),
+          );
+        } else {
+          console.log("No relevant chunks found in Pinecone");
+        }
+      } catch (error) {
+        console.error("Pinecone query error:", error.message);
+        console.error("Full error:", error);
+        // Continue without context if Pinecone query fails
+      }
     }
+  }
+
+  // Build personalized system prompt based on user profile
+  const roleExpertise = {
+    admin:
+      "an administrator with full system access and oversight responsibilities",
+    officer:
+      "a conservation officer with field expertise and research coordination duties",
+    user: "a researcher or citizen scientist contributing to biodiversity monitoring",
+  };
+
+  const expertiseLevel =
+    userProfile.role === "admin" || userProfile.role === "officer"
+      ? "advanced technical knowledge"
+      : "varying levels of expertise";
+
+  let systemPrompt = `You are an expert biodiversity AI assistant talking to ${userProfile.name}, ${roleExpertise[userProfile.role] || "a biodiversity enthusiast"}.`;
+
+  if (userProfile.organization) {
+    systemPrompt += ` They work with ${userProfile.organization}.`;
+  }
+
+  if (userProfile.bio) {
+    systemPrompt += ` User background: ${userProfile.bio}.`;
+  }
+
+  systemPrompt += ` Tailor your explanations to their ${expertiseLevel} and organizational context. Be precise with scientific terminology when appropriate, but ensure clarity.`;
+
+  if (contextText) {
+    systemPrompt += `\n\nUse the following document context to answer their questions:\n\n${contextText}`;
   }
 
   // Build messages for Groq API
   const messages = [
     {
       role: "system",
-      content: contextText
-        ? `You are a helpful assistant analyzing biodiversity research documents. Use the following context to answer questions:\n\n${contextText}`
-        : "You are a helpful assistant for biodiversity researchers.",
+      content: systemPrompt,
     },
     ...conversation.messages.slice(-5).map((m) => ({
       role: m.role,
