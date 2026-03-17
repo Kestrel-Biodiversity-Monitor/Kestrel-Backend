@@ -11,7 +11,7 @@ REST API powering the KESTREL platform — built with Node.js, Express 5, and Mo
 KESTREL Backend handles data ingestion, REST API endpoints, Role-Based Access Control (RBAC), and Artificial Intelligence processing (Pinecone RAG) to support the biodiversity monitoring platform. It stores geospatial animal sightings, community forum engagements, user management, and conservation rules.
 
 ---  
-  
+    
 ## 🛠 Tech Stack
   
 | Component | Technology |
