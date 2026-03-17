@@ -34,7 +34,7 @@ KESTREL Backend handles data ingestion, REST API endpoints, Role-Based Access Co
 - **Middleware**: `authMiddleware.js` parses the Bearer JWT, intercepts API calls if the token is malformed, limits rates, and blocks unauthorized routes (`adminMiddleware`).
 
 ### 2. Species & Analytics Data Engine
-- **`speciesController` / `reportController`**: Handles CRUD for raw species reports. Ingests precise geospatial coordinates (`lat`, `lng`), attached visual evidence, and conservation status metadata.
+- **`speciesController` / `reportController`**: Handles CRUD for raw species reports. Ingests precise geospatial coordinates (`lat`, `lng`), attached visual evidence, and conservation status metadata. 
 - **`analyticsController`**: The mathematical powerhouse. Aggregates records over 30/60/90 day pipelines to map trend progressions. Emits data consumed directly by the React dashboard (Charts).
 - **`anomalyController`**: Parses recent survey submissions against baseline averages to proactively detect poaching spikes or sudden drops in a species population. Emits critical Alerts.
 
