@@ -12,10 +12,14 @@ const { globalLimiter } = require("./middlewares/rateLimiter");
 dotenv.config();
 
 // Connect DB
-connectDB();
+if (process.env.NODE_ENV !== 'test') {
+  connectDB();
+}
 
 // Initialize Pinecone
-initPinecone();
+if (process.env.NODE_ENV !== 'test') {
+  initPinecone();
+}
 
 const app = express();
 
@@ -64,6 +68,11 @@ app.use(notFound);
 app.use(errorHandler);
 
 const PORT = process.env.PORT || 3001;
-app.listen(PORT, () => {
-  console.log(`🦅 KESTREL API running on http://localhost:${PORT}`);
-});
+
+if (process.env.NODE_ENV !== 'test') {
+  app.listen(PORT, () => {
+    console.log(`🦅 KESTREL API running on http://localhost:${PORT}`);
+  });
+}
+
+module.exports = app;
