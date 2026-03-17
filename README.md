@@ -277,7 +277,7 @@ tags        – optional, comma-separated (e.g. "tiger,survey,2024")
 | `DELETE` | `/forum/:id` | ✅ | Delete post (owner or admin) |
 
 ---
-
+  
 ### Admin Endpoints
 
 > All admin routes require `role: "admin"`.
