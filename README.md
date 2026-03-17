@@ -190,7 +190,7 @@ Authorization: Bearer <JWT_TOKEN>
 | `PUT` | `/species/:id` | ✅ Admin | Update species |
 | `DELETE` | `/species/:id` | ✅ Admin | Delete species |
 
----
+--- 
 
 ### Reports Endpoints
 
