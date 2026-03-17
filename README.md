@@ -281,7 +281,7 @@ tags        – optional, comma-separated (e.g. "tiger,survey,2024")
 ### Admin Endpoints
 
 > All admin routes require `role: "admin"`.
-
+ 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | `GET` | `/admin/users` | List all users (filter: `?role=`) |
