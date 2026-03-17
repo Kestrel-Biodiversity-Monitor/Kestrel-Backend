@@ -14,7 +14,7 @@ KESTREL Backend handles data ingestion, REST API endpoints, Role-Based Access Co
     
 ## 🛠 Tech Stack
   
-| Component | Technology |
+| Component | Technology | 
 |---|---|
 | Platform | Node.js + Express.js |
 | Language | JavaScript |
