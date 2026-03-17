@@ -6,19 +6,49 @@ REST API powering the KESTREL platform — built with Node.js, Express 5, and Mo
 
 ---
 
-## Tech Stack
+## System Overview
 
-| Layer | Technology |
+KESTREL Backend handles data ingestion, REST API endpoints, Role-Based Access Control (RBAC), and Artificial Intelligence processing (Pinecone RAG) to support the biodiversity monitoring platform. It stores geospatial animal sightings, community forum engagements, user management, and conservation rules.
+
+---
+
+## 🛠 Tech Stack
+
+| Component | Technology |
 |---|---|
-| Runtime | Node.js 20+ |
-| Framework | Express 5 |
-| Database | MongoDB + Mongoose 8 |
-| Auth | JWT (jsonwebtoken) |
-| File Uploads | Multer (5 MB limit) |
-| Rate Limiting | express-rate-limit |
-| Email | Nodemailer |
-| CSV Ingestion | csv-parse |
-| Dev Server | Nodemon |
+| Platform | Node.js + Express.js |
+| Language | JavaScript |
+| Database | MongoDB (mongoose) |
+| Vector Database | Pinecone |
+| AI / LLM | OpenAI API |
+| Authorization | JWT (JSON Web Tokens) + RBAC |
+| Email Service | Nodemailer |
+
+---
+
+## 🏗 System Architecture & Modules
+
+### 1. User & Authentication System
+- **`authController`**: Handles secure user registration, bcrypt hashed login, password resets via OTP tokens sent to emails, and securely assigns JWT access tokens.
+- **`userController`**: Profile management endpoints. Integrates seamlessly with RBAC middleware to distinguish regular `user` accounts from elevated `officer` or `admin` accounts.
+- **Middleware**: `authMiddleware.js` parses the Bearer JWT, intercepts API calls if the token is malformed, limits rates, and blocks unauthorized routes (`adminMiddleware`).
+
+### 2. Species & Analytics Data Engine
+- **`speciesController` / `reportController`**: Handles CRUD for raw species reports. Ingests precise geospatial coordinates (`lat`, `lng`), attached visual evidence, and conservation status metadata.
+- **`analyticsController`**: The mathematical powerhouse. Aggregates records over 30/60/90 day pipelines to map trend progressions. Emits data consumed directly by the React dashboard (Charts).
+- **`anomalyController`**: Parses recent survey submissions against baseline averages to proactively detect poaching spikes or sudden drops in a species population. Emits critical Alerts.
+
+### 3. Geographic Intelligence
+- **`regionController`**: Allows admins to define polygonal geofences or simple radii representing specific ranges (e.g. "Kruger National Park").
+- **`conservationController`**: Defines rulesets assigned to Regions. Used for generating conservation status codes overlayed on Maps.
+
+### 4. Interactive & Workflow Systems
+- **`forumController`**: Complete community message board exposing endpoints for threads, upvoting, threading replies, and moderation logic.
+- **`documentController`**: Exposes file streams to track research papers and data sets. Employs an approval layer state machine (`pending` → `approved`).
+- **`notificationController` / `alertController`**: Real-time message buses. Feeds the red notification bell and system-wide sticky alerts dynamically based on the priority matrix.
+
+### 5. Advanced RAG LLM Interface
+- **`llmController`**: KESTREL's AI companion hook. Reads user questions, transforms queries via `OpenAI` into Embeddings, pulls highly relevant context points from `Pinecone` (the semantic store of existing reports or rules), and returns grounded, hallucination-free advice.
 
 ---
 
@@ -49,7 +79,10 @@ kestrel-backend/
 │   ├── forumController.js    # Forum CRUD + comments
 │   ├── reportController.js   # Species reports + CSV bulk upload
 │   ├── speciesController.js  # Species master list CRUD
-│   └── userController.js     # User utilities
+│   ├── userController.js     # User utilities
+│   ├── llmController.js      # AI/LLM integration
+│   ├── regionController.js   # Geographic regions
+│   └── conservationController.js # Conservation rules
 ├── routes/                   # Express routers (10 route files)
 ├── middlewares/
 │   ├── authMiddleware.js     # JWT protect
@@ -67,7 +100,7 @@ kestrel-backend/
 
 ---
 
-## Getting Started
+## 🚀 Getting Started
 
 ### Prerequisites
 - Node.js 20+
@@ -308,6 +341,19 @@ curl http://localhost:3001/api/health
 | `SMTP_FROM` | ❌ | Sender email address |
 
 > **Note:** Password reset emails require valid SMTP credentials. For development, use [Ethereal](https://ethereal.email/) for free test credentials.
+
+---
+
+## 🧪 Testing
+
+The platform leverages **Jest** and **Supertest** for testing.
+
+```bash
+# Run unit and integration tests (automatically uses mock env configs)
+npm run test
+```
+
+Currently testing core application wiring, with active test expansions ongoing for isolated controller unit testing.
 
 ---
 
