@@ -135,7 +135,7 @@ SMTP_USER=your_smtp_user
 SMTP_PASS=your_smtp_pass
 SMTP_FROM=noreply@kestrel.io
 ```
-
+ 
 ### Running
 
 ```bash
